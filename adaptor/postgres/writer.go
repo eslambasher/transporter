@@ -20,6 +20,16 @@ type Writer struct {
 	writeMap map[ops.Op]func(message.Msg, *sql.DB) error
 }
 
+// UpsertValues is used to contruct the upsert statement
+type UpsertValues struct {
+	Inames []string
+	Ikeys  []string
+	Ckeys  []string
+	Ukeys  []string
+	Vals   []interface{}
+	Pkeys  map[string]bool
+}
+
 func newWriter() *Writer {
 	w := &Writer{}
 	w.writeMap = map[ops.Op]func(message.Msg, *sql.DB) error{
@@ -51,7 +61,7 @@ func (w *Writer) Write(msg message.Msg) func(client.Session) (message.Msg, error
 }
 
 func insertMsg(m message.Msg, s *sql.DB) error {
-	log.With("table", m.Namespace()).Debugln("INSERT")
+	/*log.With("table", m.Namespace()).Debugln("INSERT")
 	var (
 		keys         []string
 		placeholders []string
@@ -78,7 +88,52 @@ func insertMsg(m message.Msg, s *sql.DB) error {
 
 	query := fmt.Sprintf("INSERT INTO %v (%v) VALUES (%v);", m.Namespace(), strings.Join(keys, ", "), strings.Join(placeholders, ", "))
 	_, err := s.Exec(query, data...)
+	return err*/
+
+	// fmt.Printf("Write INSERT to Postgres %v values %v\n", m.Namespace(), m.Data())
+	// var (
+	// 	keys         []string
+	// 	placeholders []string
+	// 	data         []interface{}
+	// )
+
+	// i := 1
+	// for key, value := range m.Data() {
+	// 	keys = append(keys, key)
+	// 	placeholders = append(placeholders, fmt.Sprintf("$%v", i))
+
+	// 	switch value.(type) {
+	// 	case map[string]interface{}:
+	// 		value, _ = json.Marshal(value)
+	// 	case []interface{}:
+	// 		value, _ = json.Marshal(value)
+	// 	}
+	// 	data = append(data, value)
+
+	// 	i = i + 1
+	// }
+
+	st, error := GenerateUpsertStatement(m, s)
+
+	if error != nil {
+		return error
+	}
+
+	fmt.Printf("Write UPSERT BIT to Postgres %v\n", strings.Join(st.Ukeys, ", "))
+
+	query := fmt.Sprintf("INSERT INTO %v (%v) VALUES (%v)", m.Namespace(), strings.Join(st.Inames, ", "), strings.Join(st.Ikeys, ", "))
+
+	if len(st.Ukeys) == 0 {
+		query = fmt.Sprintf("%v ON CONFLICT (id) DO NOTHING;", query)
+
+	} else {
+		query = fmt.Sprintf("%v ON CONFLICT (id) DO UPDATE SET %v;", query, strings.Join(st.Ukeys, ", "))
+	}
+
+	fmt.Printf("Write INSERT to Postgres %v\n", query)
+	_, err := s.Exec(query, st.Vals...)
 	return err
+
 }
 
 func deleteMsg(m message.Msg, s *sql.DB) error {
@@ -198,4 +253,50 @@ func primaryKeys(namespace string, db *sql.DB) (primaryKeys map[string]bool, err
 	}
 
 	return primaryKeys, err
+}
+
+// GenerateUpsertStatement used to generate set
+func GenerateUpsertStatement(m message.Msg, s *sql.DB) (UpsertValues, error) {
+	fmt.Printf("Generating UPSERT statement for Postgres %v\n", m.Namespace())
+	var (
+		inames []string
+		ikeys  []string
+		ckeys  []string
+		ukeys  []string
+		vals   []interface{}
+	)
+
+	log.Infof("Prepare primary keys for %v", m.Namespace)
+	pkeys, err := primaryKeys(m.Namespace(), s)
+
+	log.Infof("got primary keys")
+	if err != nil {
+		log.Errorln("Error generating UPSERT statement for Postgres %v : %v", m.Namespace(), err)
+	} else {
+
+		i := 1
+		for key, value := range m.Data() {
+			inames = append(inames, fmt.Sprintf("%v", key))
+			ikeys = append(ikeys, fmt.Sprintf("$%v", i))
+			if pkeys[key] { // key is primary key
+				ckeys = append(ckeys, fmt.Sprintf("%v=$%v", key, i))
+			} else {
+				ukeys = append(ukeys, fmt.Sprintf("%v=$%v", key, i))
+			}
+
+			switch value.(type) {
+			case map[string]interface{}:
+				value, _ = json.Marshal(value)
+			case []interface{}:
+				value, _ = json.Marshal(value)
+				value = string(value.([]byte))
+				value = fmt.Sprintf("{%v}", value.(string)[1:len(value.(string))-1])
+			}
+			vals = append(vals, value)
+			i = i + 1
+		}
+
+	}
+
+	return UpsertValues{Inames: inames, Ikeys: ikeys, Ckeys: ckeys, Ukeys: ukeys, Vals: vals, Pkeys: pkeys}, err
 }
