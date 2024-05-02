@@ -17,6 +17,7 @@ import (
 	"github.com/compose/transporter/commitlog"
 	"github.com/compose/transporter/events"
 	"github.com/compose/transporter/function"
+	"github.com/compose/transporter/log"
 	"github.com/compose/transporter/offset"
 	"github.com/compose/transporter/pipeline"
 	"github.com/dop251/goja"
@@ -243,6 +244,7 @@ func (tf *Transformer) Transform(call goja.FunctionCall) goja.Value {
 
 func (n *Node) Save(call goja.FunctionCall) goja.Value {
 	name, out, namespace := exportArgs(call.Arguments)
+	log.Infof("Save name: %s, namespace: %s ", name, namespace)
 	a := out.(Adaptor)
 	options := []pipeline.OptionFunc{
 		pipeline.WithParent(n.parent),

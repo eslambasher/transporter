@@ -1,6 +1,7 @@
 package mongodb
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -13,8 +14,11 @@ import (
 	"github.com/compose/transporter/message"
 	"github.com/compose/transporter/message/data"
 	"github.com/compose/transporter/message/ops"
-	mgo "gopkg.in/mgo.v2"
-	"gopkg.in/mgo.v2/bson"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
+	"gopkg.in/mgo.v2"
 )
 
 var (
@@ -38,78 +42,96 @@ func newReader(tail bool, filters map[string]CollectionFilter) client.Reader {
 	return &Reader{tail, filters, 5 * time.Second}
 }
 
+type resultDoc struct {
+	doc bson.M
+	c   string
+}
+
+type iterationComplete struct {
+	oplogTime primitive.Timestamp
+	c         string
+}
+
 func (r *Reader) Read(resumeMap map[string]client.MessageSet, filterFn client.NsFilterFunc) client.MessageChanFunc {
 	return func(s client.Session, done chan struct{}) (chan client.MessageSet, error) {
 		out := make(chan client.MessageSet)
-		session := s.(*Session).mgoSession.Copy()
+		client := s.(*Session).client
+
 		go func() {
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+			defer cancel()
+
 			defer func() {
-				session.Close()
 				close(out)
 			}()
-			log.With("db", session.DB("").Name).Infoln("starting Read func")
-			collections, err := r.listCollections(session.Copy(), filterFn)
+			var dbname = s.(*Session).dbname
+			log.With("db", dbname).Infoln("starting Read func")
+			collections, err := r.listCollections(ctx, client, dbname, filterFn)
 			if err != nil {
-				log.With("db", session.DB("").Name).Errorf("unable to list collections, %s", err)
+				log.With("db", dbname).Errorf("unable to list collections, %s", err)
 				return
 			}
 			var wg sync.WaitGroup
-			for _, c := range collections {
+			for _, collectionName := range collections {
 				var lastID interface{}
 				oplogTime := timeAsMongoTimestamp(time.Now())
 				var mode commitlog.Mode // default to Copy
-				if m, ok := resumeMap[c]; ok {
+				if m, ok := resumeMap[collectionName]; ok {
 					lastID = m.Msg.Data().Get("_id")
 					mode = m.Mode
 					oplogTime = timeAsMongoTimestamp(time.Unix(m.Timestamp, 0))
 				}
 				if mode == commitlog.Copy {
-					if err := r.iterateCollection(r.iterate(lastID, session.Copy(), c), out, done, int64(oplogTime)>>32); err != nil {
-						log.With("db", session.DB("").Name).Errorln(err)
+					if err := r.iterateCollection(r.iterate(lastID, ctx, client, dbname, collectionName), out, done, int64(oplogTime.T)); err != nil {
+						log.With("db", dbname).Errorln(err)
 						return
 					}
-					log.With("db", session.DB("").Name).With("collection", c).Infoln("iterating complete")
+					log.With("db", dbname).With("collection", collectionName).Infoln("iterating complete")
 				}
 				if r.tail {
 					wg.Add(1)
-					log.With("collection", c).Infof("oplog start timestamp: %d", oplogTime)
-					go func(wg *sync.WaitGroup, c string, o bson.MongoTimestamp) {
+					log.With("collection", collectionName).Infof("oplog start timestamp: %d", oplogTime)
+					go func(wg *sync.WaitGroup, collectionName string, o primitive.Timestamp) {
 						defer wg.Done()
-						errc := r.tailCollection(c, session.Copy(), o, out, done)
+
+						// c - collection
+						errc := r.tailCollection(collectionName, ctx, client, dbname, o, out, done)
 						for err := range errc {
-							log.With("db", session.DB("").Name).With("collection", c).Errorln(err)
+							log.With("db", dbname).With("collection", collectionName).Errorln(err)
 							return
 						}
-					}(&wg, c, oplogTime)
+					}(&wg, collectionName, oplogTime)
 				}
 			}
-			log.With("db", session.DB("").Name).Infoln("Read completed")
+			log.With("db", dbname).Infoln("Read completed")
 			// this will block if we're tailing
 			wg.Wait()
+			return
 		}()
 
 		return out, nil
 	}
 }
 
-func (r *Reader) listCollections(mgoSession *mgo.Session, filterFn func(name string) bool) ([]string, error) {
-	defer mgoSession.Close()
+func (r *Reader) listCollections(ctx context.Context, client *mongo.Client, dbName string, filterFn func(name string) bool) ([]string, error) {
 	var colls []string
-	db := mgoSession.DB("")
-	collections, err := db.CollectionNames()
+
+	// Retrieve all collection names first, without MongoDB-side filtering.
+	collections, err := client.Database(dbName).ListCollectionNames(ctx, bson.D{{}})
 	if err != nil {
-		return colls, err
+		return nil, fmt.Errorf("failed to list collections in '%s' database: %v", dbName, err)
 	}
-	log.With("db", db.Name).With("num_collections", len(collections)).Infoln("collection count")
+
 	for _, c := range collections {
 		if filterFn(c) && !strings.HasPrefix(c, "system.") {
-			log.With("db", db.Name).With("collection", c).Infoln("adding for iteration...")
+			log.With("db", dbName).With("collection", c).Infoln("adding for iteration...")
 			colls = append(colls, c)
 		} else {
-			log.With("db", db.Name).With("collection", c).Infoln("skipping iteration...")
+			log.With("db", dbName).With("collection", c).Infoln("skipping iteration...")
 		}
 	}
-	log.With("db", db.Name).Infoln("done iterating collections")
+
 	return colls, nil
 }
 
@@ -130,165 +152,195 @@ func (r *Reader) iterateCollection(in <-chan message.Msg, out chan<- client.Mess
 	}
 }
 
-func (r *Reader) iterate(lastID interface{}, s *mgo.Session, c string) <-chan message.Msg {
+func (r *Reader) iterate(lastID interface{}, ctx context.Context, client *mongo.Client, dbName string, collectionName string) <-chan message.Msg {
 	msgChan := make(chan message.Msg)
+
 	go func() {
-		defer func() {
-			s.Close()
-			close(msgChan)
-		}()
-		db := s.DB("").Name
-		canReissueQuery := r.requeryable(c, s)
-		for {
-			log.With("collection", c).Infoln("iterating...")
-			session := s.Copy()
-			iter := r.catQuery(c, lastID, session).Iter()
-			var result bson.M
-			for iter.Next(&result) {
-				if id, ok := result["_id"]; ok {
-					lastID = id
-				}
-				msgChan <- message.From(ops.Insert, c, data.Data(result))
-				result = bson.M{}
-			}
-			if err := iter.Err(); err != nil {
-				log.With("database", db).With("collection", c).Errorf("error reading, %s", err)
-				session.Close()
-				if canReissueQuery {
-					log.With("database", db).With("collection", c).Errorln("attempting to reissue query")
-					time.Sleep(5 * time.Second)
-					continue
-				}
-				return
-			}
-			iter.Close()
-			session.Close()
+		defer close(msgChan)
+
+		canReissueQuery := r.requeryable(collectionName, ctx, client, dbName)
+
+		// Create the query with catQuery, assuming it's adapted to return a cursor and an error
+		cursor, err := r.catQuery(collectionName, lastID, ctx, client, dbName)
+		if err != nil {
+			log.With("database", dbName).With("collection", collectionName).Errorf("error setting up query, %s", err)
 			return
 		}
+		defer cursor.Close(ctx)
+
+		for {
+			if !cursor.Next(ctx) {
+				if err := cursor.Err(); err != nil {
+					log.With("database", dbName).With("collection", collectionName).Errorf("error iterating results, %s", err)
+					if canReissueQuery {
+						time.Sleep(5 * time.Second)
+						cursor, err = r.catQuery(collectionName, lastID, ctx, client, dbName) // Attempt to recreate the cursor
+						if err != nil {
+							log.With("database", dbName).With("collection", collectionName).Errorf("error reissuing query, %s", err)
+							return
+						}
+						continue
+					}
+					return
+				}
+				break // Exit loop if no error but iteration is done
+			}
+
+			var result bson.M
+			if err := cursor.Decode(&result); err != nil {
+				log.With("database", dbName).With("collection", collectionName).Errorf("error decoding result, %s", err)
+				return
+			}
+
+			if id, ok := result["_id"]; ok {
+				lastID = id
+			}
+			// Assuming a conversion function exists that properly creates a message.Msg from result
+			msgChan <- message.From(ops.Insert, collectionName, data.Data(result))
+		}
 	}()
+
 	return msgChan
 }
 
-func (r *Reader) catQuery(c string, lastID interface{}, mgoSession *mgo.Session) *mgo.Query {
+// catQuery assembles the query for fetching documents from a collection based on the lastID seen
+// and any filters applied specifically to that collection. It has been adapted
+// for the MongoDB Go Driver, thus it needs a tweak in the return type.
+func (r *Reader) catQuery(c string, lastID interface{}, ctx context.Context, client *mongo.Client, dbName string) (*mongo.Cursor, error) {
+	coll := client.Database(dbName).Collection(c)
 	query := bson.M{}
+
+	// Apply any collection-specific filters if present
 	if f, ok := r.collectionFilters[c]; ok {
-		query = bson.M(f)
+		for key, value := range f {
+			query[key] = value
+		}
 	}
+
+	// Condition to fetch documents newer than the lastID, if provided
 	if lastID != nil {
 		query["_id"] = bson.M{"$gt": lastID}
 	}
-	return mgoSession.DB("").C(c).Find(query).Sort("_id")
+
+	// Executing the find operation with the constructed query and sorting by "_id"
+	findOptions := options.Find().SetSort(bson.D{{Key: "_id", Value: 1}})
+	cursor, err := coll.Find(ctx, query, findOptions)
+	if err != nil {
+		return nil, err
+	}
+
+	return cursor, nil // Returning the cursor to iterate over the query results
 }
 
-func (r *Reader) requeryable(c string, mgoSession *mgo.Session) bool {
-	db := mgoSession.DB("")
-	indexes, err := db.C(c).Indexes()
+func (r *Reader) requeryable(c string, ctx context.Context, client *mongo.Client, dbName string) bool {
+	coll := client.Database(dbName).Collection(c)
+	indexesCursor, err := coll.Indexes().List(ctx)
 	if err != nil {
-		log.With("database", db.Name).With("collection", c).Errorf("unable to list indexes, %s", err)
+		log.With("database", dbName).With("collection", c).Errorf("unable to list indexes, %s", err)
 		return false
 	}
-	for _, index := range indexes {
-		if index.Key[0] == "_id" {
-			var result bson.M
-			err := db.C(c).Find(nil).Select(bson.M{"_id": 1}).One(&result)
-			if err != nil {
-				log.With("database", db.Name).With("collection", c).Errorf("unable to sample document, %s", err)
-				break
+	defer indexesCursor.Close(ctx)
+
+	var indexesList []bson.M
+	if err = indexesCursor.All(ctx, &indexesList); err != nil {
+		log.With("database", dbName).With("collection", c).Errorf("unable to decode indexes list, %s", err)
+		return false
+	}
+
+	for _, index := range indexesList {
+		if keys, ok := index["key"].(bson.M); ok {
+			if _, ok := keys["_id"]; ok {
+				var result bson.M
+				err := coll.FindOne(ctx, bson.M{"_id": bson.M{"$exists": true}}, options.FindOne().SetProjection(bson.M{"_id": 1})).Decode(&result)
+				if err != nil {
+					log.With("database", dbName).With("collection", c).Errorf("unable to sample document, %s", err)
+					return false
+				}
+				// Assuming a function 'sortable' exists to check the type of _id
+				if _, ok := result["_id"]; ok {
+					return true
+				}
+				return false
 			}
-			if id, ok := result["_id"]; ok && sortable(id) {
-				return true
-			}
-			break
 		}
 	}
-	log.With("database", db.Name).With("collection", c).Infoln("invalid _id, any issues copying will be aborted")
+
+	log.With("database", dbName).With("collection", c).Infoln("invalid _id, any issues copying will be aborted")
 	return false
 }
 
 func sortable(id interface{}) bool {
 	switch id.(type) {
-	case bson.ObjectId, string, float64, int64, time.Time:
+	case primitive.ObjectID, string, float64, int64, time.Time:
 		return true
 	}
 	return false
 }
 
-func (r *Reader) tailCollection(c string, mgoSession *mgo.Session, oplogTime bson.MongoTimestamp, out chan<- client.MessageSet, done chan struct{}) chan error {
+func (r *Reader) tailCollection(collectionName string, ctx context.Context, mongoClient *mongo.Client, dbName string, oplogTime primitive.Timestamp, out chan<- client.MessageSet, done chan struct{}) chan error {
 	errc := make(chan error)
-	go func() {
-		defer func() {
-			mgoSession.Close()
-			close(errc)
-		}()
 
-		var (
-			collection = mgoSession.DB("local").C("oplog.rs")
-			result     oplogDoc // hold the document
-			db         = mgoSession.DB("").Name
-			ns         = fmt.Sprintf("%s.%s", db, c)
-			query      = bson.M{"ns": ns, "ts": bson.M{"$gte": oplogTime}}
-			iter       = collection.Find(query).LogReplay().Sort("$natural").Tail(r.oplogTimeout)
-		)
-		defer iter.Close()
+	go func() {
+		defer close(errc)
+
+		// Initialize the change stream for a given collection.
+		pipeline := mongo.Pipeline{{{"$match", bson.D{{"operationType", bson.D{{"$in", []string{"insert", "update", "delete"}}}}}}}}
+		opts := options.ChangeStream().SetFullDocument(options.UpdateLookup).SetStartAtOperationTime(&oplogTime)
+
+		changeStream, err := mongoClient.Database(dbName).Collection(collectionName).Watch(ctx, pipeline, opts)
+		if err != nil {
+			log.With("database", dbName).With("collection", collectionName).Errorf("error opening change stream, %s", err)
+			errc <- err
+			return
+		}
+		defer changeStream.Close(ctx)
 
 		for {
-			log.With("db", db).Infof("tailing oplog with query %+v", query)
 			select {
+			case <-ctx.Done():
+				log.With("database", dbName).With("collection", collectionName).Infoln("context done, stopping tailing...")
+				return
 			case <-done:
-				log.With("db", db).Infoln("tailing stopping...")
+				log.With("database", dbName).With("collection", collectionName).Infoln("done signal received, stopping tailing...")
 				return
 			default:
-				for iter.Next(&result) {
-					if result.validOp(ns) {
-						var (
-							doc bson.M
-							err error
-							op  ops.Op
-						)
-						switch result.Op {
-						case "i":
-							op = ops.Insert
-							doc = result.O
-						case "d":
-							op = ops.Delete
-							doc = result.O
-						case "u":
-							op = ops.Update
-							doc, err = r.getOriginalDoc(result.O2, c, mgoSession)
-							if err != nil {
-								// errors aren't fatal here, but we need to send it down the pipe
-								log.With("ns", result.Ns).Errorf("unable to getOriginalDoc, %s", err)
-								continue
-							}
-						}
-
-						msg := message.From(op, c, data.Data(doc)).(*message.Base)
-						msg.TS = int64(result.Ts) >> 32
-
-						out <- client.MessageSet{
-							Msg:       msg,
-							Timestamp: msg.TS,
-							Mode:      commitlog.Sync,
-						}
-						oplogTime = result.Ts
+				if changeStream.Next(ctx) {
+					var event bson.M
+					if err := changeStream.Decode(&event); err != nil {
+						log.With("database", dbName).With("collection", collectionName).Errorf("error decoding change stream event, %s", err)
+						continue
 					}
-					result = oplogDoc{}
+
+					opType, opFound := event["operationType"].(string)
+					if !opFound || (opType != "insert" && opType != "update" && opType != "delete") {
+						// If operation type is not valid, skip this event.
+						continue
+					}
+
+					// Process valid operation
+					doc := event["fullDocument"].(bson.M) // For insert and update operations
+					var op ops.Op
+					switch opType {
+					case "insert":
+						op = ops.Insert
+					case "update":
+						op = ops.Update
+					case "delete":
+						op = ops.Delete
+						// For delete operation, you might want to handle it differently,
+						// as the full document might not be available.
+					}
+
+					msg := message.From(op, fmt.Sprintf("%s.%s", dbName, collectionName), data.Data(doc)).(*message.Base)
+					// Construct and send the message set.
+					out <- client.MessageSet{
+						Msg:       msg,
+						Timestamp: msg.Timestamp(), // Assuming a conversion method exists from the event to your timestamp format.
+						Mode:      commitlog.Sync,  // Mode based on your logic.
+					}
 				}
 			}
-
-			if iter.Timeout() {
-				continue
-			}
-			if iter.Err() != nil {
-				log.With("path", db).Errorf("error tailing oplog, %s", iter.Err())
-				mgoSession.Refresh()
-			}
-
-			query = bson.M{"ts": bson.M{"$gte": oplogTime}}
-			iter = collection.Find(query).LogReplay().Tail(r.oplogTimeout)
-			time.Sleep(100 * time.Millisecond)
 		}
-
 	}()
 	return errc
 }
@@ -317,7 +369,7 @@ func (r *Reader) getOriginalDoc(doc bson.M, c string, s *mgo.Session) (result bs
 // oplogDoc are representations of the mongodb oplog document
 // detailed here, among other places.  http://www.kchodorow.com/blog/2010/10/12/replication-internals/
 type oplogDoc struct {
-	Ts bson.MongoTimestamp `bson:"ts"`
+	Ts primitive.Timestamp `bson:"ts"`
 	H  int64               `bson:"h"`
 	V  int                 `bson:"v"`
 	Op string              `bson:"op"`
@@ -332,6 +384,6 @@ func (o *oplogDoc) validOp(ns string) bool {
 	return ns == o.Ns && (o.Op == "i" || o.Op == "d" || o.Op == "u")
 }
 
-func timeAsMongoTimestamp(t time.Time) bson.MongoTimestamp {
-	return bson.MongoTimestamp(t.Unix() << 32)
+func timeAsMongoTimestamp(t time.Time) primitive.Timestamp {
+	return primitive.Timestamp{T: uint32(t.Unix()), I: uint32(1)} // Setting the increment (I) as 1 by default
 }

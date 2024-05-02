@@ -58,10 +58,9 @@ func init() {
 
 func (m *mongoDB) Client() (client.Client, error) {
 	return NewClient(WithURI(m.URI),
-		WithTimeout(m.Timeout),
-		WithSSL(m.SSL),
+		// TODO: skip verify hardcoded here
+		WithSSL(m.SSL, true),
 		WithCACerts(m.CACerts),
-		WithFsync(m.FSync),
 		WithTail(m.Tail),
 		WithWriteConcern(m.Wc),
 		WithReadPreference(m.ReadPreference))
@@ -78,9 +77,9 @@ func (m *mongoDB) Reader() (client.Reader, error) {
 }
 
 func (m *mongoDB) Writer(done chan struct{}, wg *sync.WaitGroup) (client.Writer, error) {
-	if m.Bulk {
-		return newBulker(done, wg), nil
-	}
+	//if m.Bulk {
+	//return newBulker(done, wg), nil
+	//}
 	return newWriter(), nil
 }
 
