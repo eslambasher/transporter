@@ -331,7 +331,7 @@ func (r *Reader) tailCollection(collectionName string, ctx context.Context, mong
 						// as the full document might not be available.
 					}
 
-					msg := message.From(op, fmt.Sprintf("%s.%s", dbName, collectionName), data.Data(doc)).(*message.Base)
+					msg := message.From(op, collectionName, data.Data(doc)).(*message.Base)
 					// Construct and send the message set.
 					out <- client.MessageSet{
 						Msg:       msg,
