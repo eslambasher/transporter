@@ -257,7 +257,8 @@ func WithReadPreference(readPreference string) ClientOptionFunc {
 		case "nearest":
 			rp = readpref.Nearest()
 		default:
-			return InvalidReadPreferenceError{ReadPreference: readPreference}
+			//return InvalidReadPreferenceError{ReadPreference: readPreference}
+			rp = readpref.Primary()
 		}
 
 		// Assuming c.clientOptions is an instance of *options.ClientOptions that you're building up
