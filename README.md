@@ -4,6 +4,7 @@ Compose Transporter helps with database transformations from one store to anothe
 
 Transporter
 ===========
+This project is a derivative of the original compose/transporter, updated to substitute the deprecated mgo driver with the official Go MongoDB driver. This update enables compatibility with the newest versions of MongoDB, including the mongodb+srv protocol. There are still adjustments to be made concerning date formatting, but the pipelines are operational once more.
 
 Warning About v1.0.0
 ------------
