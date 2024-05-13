@@ -5,6 +5,7 @@ go 1.17
 require (
 	github.com/compose/mejson v0.0.0-20150828131556-afcf51c7c640
 	github.com/dop251/goja v0.0.0-20170430194003-d382686fd20b
+	github.com/eslambasher/mejson v0.0.0-20240513092819-38d588053990
 	github.com/go-mysql-org/go-mysql v1.5.1-0.20220505091125-145f68457838
 	github.com/hashicorp/go-version v0.0.0-20161031182605-e96d38404026
 	github.com/lib/pq v1.8.0
@@ -29,7 +30,6 @@ require (
 	github.com/bmizerany/assert v0.0.0-20160611221934-b7ed37b82869 // indirect
 	github.com/cenkalti/backoff v0.0.0-20150522193654-6c45d6bc1e78 // indirect
 	github.com/dlclark/regexp2 v1.1.6 // indirect
-	github.com/eslambasher/mejson v0.0.0-20240513092819-38d588053990 // indirect
 	github.com/fortytw2/leaktest v1.3.0 // indirect
 	github.com/golang/protobuf v1.5.0 // indirect
 	github.com/golang/snappy v0.0.1 // indirect
