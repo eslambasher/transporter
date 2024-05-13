@@ -3,9 +3,8 @@ module github.com/compose/transporter
 go 1.17
 
 require (
-	github.com/compose/mejson v0.0.0-20150828131556-afcf51c7c640
 	github.com/dop251/goja v0.0.0-20170430194003-d382686fd20b
-	github.com/eslambasher/mejson v0.0.0-20240513092819-38d588053990
+	github.com/eslambasher/mejson v0.0.0-20240513101816-85e55d78325b
 	github.com/go-mysql-org/go-mysql v1.5.1-0.20220505091125-145f68457838
 	github.com/hashicorp/go-version v0.0.0-20161031182605-e96d38404026
 	github.com/lib/pq v1.8.0
@@ -19,7 +18,7 @@ require (
 	github.com/twpayne/go-geom v1.4.1
 	go.mongodb.org/mongo-driver v1.15.0
 	gopkg.in/gorethink/gorethink.v3 v3.0.5
-	gopkg.in/mgo.v2 v2.0.0-20160818020120-3f83fa500528
+	gopkg.in/mgo.v2 v2.0.0-20190816093944-a6b53ec6cb22
 	gopkg.in/olivere/elastic.v2 v2.0.1-0.20180214101641-ad2886760fe8
 	gopkg.in/olivere/elastic.v3 v3.0.42-0.20180214101641-ad2886760fe8
 	gopkg.in/olivere/elastic.v5 v5.0.64
