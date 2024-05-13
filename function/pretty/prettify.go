@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/compose/mejson"
+	"github.com/eslambasher/mejson"
 	"github.com/compose/transporter/function"
 	"github.com/compose/transporter/log"
 	"github.com/compose/transporter/message"

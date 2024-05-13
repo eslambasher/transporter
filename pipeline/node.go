@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/compose/mejson"
+	"github.com/eslambasher/mejson"
 	"github.com/compose/transporter/adaptor"
 	"github.com/compose/transporter/client"
 	"github.com/compose/transporter/commitlog"

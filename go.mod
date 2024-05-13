@@ -29,6 +29,7 @@ require (
 	github.com/bmizerany/assert v0.0.0-20160611221934-b7ed37b82869 // indirect
 	github.com/cenkalti/backoff v0.0.0-20150522193654-6c45d6bc1e78 // indirect
 	github.com/dlclark/regexp2 v1.1.6 // indirect
+	github.com/eslambasher/mejson v0.0.0-20240513092819-38d588053990 // indirect
 	github.com/fortytw2/leaktest v1.3.0 // indirect
 	github.com/golang/protobuf v1.5.0 // indirect
 	github.com/golang/snappy v0.0.1 // indirect

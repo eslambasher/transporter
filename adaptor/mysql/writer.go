@@ -7,11 +7,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/compose/mejson"
 	"github.com/compose/transporter/client"
 	"github.com/compose/transporter/log"
 	"github.com/compose/transporter/message"
 	"github.com/compose/transporter/message/ops"
+	"github.com/eslambasher/mejson"
 	"github.com/twpayne/go-geom"
 	"github.com/twpayne/go-geom/encoding/wkt"
 )

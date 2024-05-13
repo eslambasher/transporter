@@ -32,6 +32,8 @@ github.com/docker/go-connections v0.4.0/go.mod h1:Gbd7IOopHjR8Iph03tsViu4nIes5Xh
 github.com/docker/go-units v0.4.0/go.mod h1:fgPhTUdO+D/Jk86RDLlptpiXQzgHJF7gydDDbaIK4Dk=
 github.com/dop251/goja v0.0.0-20170430194003-d382686fd20b h1:lncLs5A33vr20e4bxw/BFeOBOr1n+a2BUJGZy0vCbdM=
 github.com/dop251/goja v0.0.0-20170430194003-d382686fd20b/go.mod h1:Mw6PkjjMXWbTj+nnj4s3QPXq1jaT0s5pC0iFD4+BOAA=
+github.com/eslambasher/mejson v0.0.0-20240513092819-38d588053990 h1:gucJzmy8nRMQJ47w0dprh4jFGmpjS0lKlqpUalr9p+I=
+github.com/eslambasher/mejson v0.0.0-20240513092819-38d588053990/go.mod h1:XZKZTXM36zHeTaKmMjo36aVB9BCDR8sBiVDXloimAUw=
 github.com/fortytw2/leaktest v1.3.0 h1:u8491cBMTQ8ft8aeV+adlcytMZylmA5nnwwkRZjI8vw=
 github.com/fortytw2/leaktest v1.3.0/go.mod h1:jDsjWgpAGjm2CA7WthBh/CdZYEPF31XHquHwclZch5g=
 github.com/go-mysql-org/go-mysql v1.5.1-0.20220505091125-145f68457838 h1:AZqwTcfXnYgPAlaH0YDdmDQoT8SQ6rQ6GYFO7s0fu4Q=

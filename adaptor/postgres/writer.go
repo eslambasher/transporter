@@ -7,7 +7,7 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/compose/mejson"
+	"github.com/eslambasher/mejson"
 	"github.com/compose/transporter/client"
 	"github.com/compose/transporter/log"
 	"github.com/compose/transporter/message"
